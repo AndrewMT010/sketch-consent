@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketching App</title>
+<!--
+  Stage 20, piece four: the "Allow Claude?" page for Supabase's sign-in for Claude (decision 5).
+
+  Supabase's OAuth 2.1 server sends the browser here (Site URL + Authorization Path) with an
+  authorization_id. The page signs the owner in with Apple if needed, shows which app is asking,
+  and approves or denies through supabase.auth.oauth — My Task App's consent page, as one static
+  file. It must be served as HTML from a real host (GitHub Pages, or a custom domain): Supabase's
+  own Edge Functions and Storage serve HTML as plain text.
+
+  The address and publishable key below are public values; nothing secret is in this page.
+-->
+<style>
+  :root { --bg: #F7F6F3; --card: #FFFFFF; --ink: #1F1F1D; --muted: #6B6A66; --line: #E2E0DA; --accent: #1F1F1D; --on-accent: #FFFFFF; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #18191B; --card: #202124; --ink: #E8E6E1; --muted: #A09F99; --line: #36373B; --accent: #E8E6E1; --on-accent: #18191B; }
+  }
+  :root[data-theme="dark"] { --bg: #18191B; --card: #202124; --ink: #E8E6E1; --muted: #A09F99; --line: #36373B; --accent: #E8E6E1; --on-accent: #18191B; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { margin: 0 0 14px; color: var(--muted); }
+  p b { color: var(--ink); font-weight: 600; }
+  ul { margin: 0 0 18px; padding-left: 20px; color: var(--muted); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 600; border-radius: 9px; padding: 10px 18px; cursor: pointer; border: 1px solid var(--line);
+           background: transparent; color: var(--ink); }
+  button.lit { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .error { color: #B3261E; }
+</style>
+</head>
+<body>
+<main id="main"><p>Loading…</p></main>
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/+esm";
+
+  const supabase = createClient(
+    "https://hakmupwhgecqgvtimyup.supabase.co",
+    "sb_publishable_O5kD5WMYcO2IdG0eDQcVFw_wU27h25_",
+    { auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true } },
+  );
+  const main = document.getElementById("main");
+  const id = new URLSearchParams(location.search).get("authorization_id");
+
+  function show(html) { main.innerHTML = html; }
+  function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+  async function start() {
+    if (!id) return show('<h1>Sketching App</h1><p class="error">This page is opened by an app asking to connect. Nothing was asked.</p>');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      show('<h1>Sketching App</h1><p>Sign in with the Apple ID you use on your tablets.</p><div class="row"><button class="lit" id="apple">Sign in with Apple</button></div>');
+      document.getElementById("apple").onclick = () =>
+        supabase.auth.signInWithOAuth({ provider: "apple", options: { redirectTo: location.href } });
+      return;
+    }
+    const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(id);
+    if (error || !data) return show(`<h1>Sketching App</h1><p class="error">${esc(error?.message ?? "That request has run out. Start again from the app.")}</p>`);
+    if (data.redirect_url && !data.client) return location.replace(data.redirect_url); // already allowed
+    const who = esc(data.client?.client_name ?? data.client?.name ?? "An app");
+    show(`<h1>Allow ${who} to read your drawings?</h1>
+      <p>Signed in as <b>${esc(session.user.email ?? "you")}</b>.</p>
+      <ul><li>See your drawings' names, layers, and when they were worked on</li>
+          <li>Read annotations on them</li><li>See the pictures your tablets made of them</li></ul>
+      <p>It can't change anything. You can disconnect it in Claude's settings at any time.</p>
+      <div class="row"><button class="lit" id="allow">Allow</button><button id="deny">Don't allow</button></div>`);
+    const decide = async (allow) => {
+      document.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      const call = allow ? supabase.auth.oauth.approveAuthorization : supabase.auth.oauth.denyAuthorization;
+      const { data: out, error: e } = await call.call(supabase.auth.oauth, id, { skipBrowserRedirect: true });
+      if (e || !out?.redirect_url) return show(`<h1>Sketching App</h1><p class="error">${esc(e?.message ?? "Couldn't finish. Try again from the app.")}</p>`);
+      location.replace(out.redirect_url);
+    };
+    document.getElementById("allow").onclick = () => decide(true);
+    document.getElementById("deny").onclick = () => decide(false);
+  }
+  start().catch((e) => show(`<h1>Sketching App</h1><p class="error">${esc(e.message)}</p>`));
+</script>
+</body>
+</html>
